@@ -1,22 +1,3 @@
-"""
-fetch_all.py — Fetch ~36,800 papers: 20,000 from PWC bulk + ~16,800 from OpenAlex
-
-Sources:
-  PWC bulk  → HuggingFace dataset pwc-archive/papers-with-abstracts (550k papers)
-              Streamed once, reservoir-sampled per area so every research area
-              gets equal representation. Target: 20,000 total.
-
-  OpenAlex  → 12 domains × 14 years (2012–2025) × 100 papers = ~16,800 papers
-              Year-by-year so time coverage is uniform.
-
-Usage:
-  python ingestion/fetch_all.py          # full run
-  python ingestion/fetch_all.py --test   # smoke test (~30 papers total)
-
-Resumable: OpenAlex buckets tracked in ingestion/fetch_progress.json
-           PWC is a single streaming pass — re-run overwrites.
-"""
-
 import json
 import time
 import math
@@ -35,16 +16,13 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / "backend" / ".env")
 DATA_PATH     = Path("ingestion/papers.json")
 PROGRESS_FILE = Path("ingestion/fetch_progress.json")
 
-# ── PWC settings ───────────────────────────────────────────────────────────────
 PWC_HF_DATASET = "pwc-archive/papers-with-abstracts"
-PWC_TARGET     = 20_000   # total papers to sample from the 550k dataset
-PWC_OVERSAMPLE = 3        # collect 3× quota during streaming, re-rank after S2 enrichment
+PWC_TARGET     = 20_000
+PWC_OVERSAMPLE = 3
 
-# ── Semantic Scholar settings ──────────────────────────────────────────────────
 S2_BATCH_URL  = "https://api.semanticscholar.org/graph/v1/paper/batch"
 S2_BATCH_SIZE = 500
 
-# ── OpenAlex settings ──────────────────────────────────────────────────────────
 OA_BASE    = "https://api.openalex.org/works"
 OA_HEADERS = {
     "User-Agent": "ScholarRAG/1.0 (mailto:24f3003029@ds.study.iitm.ac.in)",
@@ -55,11 +33,9 @@ OA_SELECT = (
     "primary_location,abstract_inverted_index,cited_by_count,concepts,type"
 )
 OA_DELAY    = 0.12
-OA_YEARS    = list(range(2012, 2026))   # 2012–2025 inclusive
-OA_PER_YEAR = 100                        # papers per domain per year
+OA_YEARS    = list(range(2012, 2026))
+OA_PER_YEAR = 100
 
-# (label, OpenAlex concept ID)
-# Verify any ID at: https://api.openalex.org/concepts?search=<label>
 OA_DOMAINS = [
     ("Medicine",              "C71924100"),
     ("Biology",               "C86803240"),
@@ -75,8 +51,6 @@ OA_DOMAINS = [
     ("Astronomy",             "C1276947"),
 ]
 
-
-# ── Progress helpers ───────────────────────────────────────────────────────────
 
 def load_progress() -> set:
     if PROGRESS_FILE.exists():
@@ -113,10 +87,7 @@ def save(papers: list) -> list:
     return deduped
 
 
-# Keyword → PWC area mapping (6 official PWC areas)
 _AREA_KEYWORDS: list[tuple[str, list[str]]] = [
-    # ── Vision ────────────────────────────────────────────────────────────────
-    # Still images: classification, detection, segmentation, generation, 3D, medical
     ("vision", ["image classification", "image generation", "image segmentation",
                 "image editing", "image restoration", "image understanding",
                 "image super-resolution", "image matching", "image matting",
@@ -128,16 +99,12 @@ _AREA_KEYWORDS: list[tuple[str, list[str]]] = [
                 "zero-shot segmentation", "inpainting", "style transfer",
                 "image synthesis", "text-to-image", "nerf", "neural radiance"]),
 
-    # ── Video ─────────────────────────────────────────────────────────────────
-    # Temporal / multi-frame understanding and generation
     ("video", ["video classification", "video generation", "video segmentation",
                "video understanding", "video super-resolution", "video matting",
                "object tracking", "action recognition", "temporal action",
                "video captioning", "activity recognition", "action detection",
                "video question", "video grounding"]),
 
-    # ── Language ──────────────────────────────────────────────────────────────
-    # Text understanding and generation (language modeling lives under General)
     ("language", ["machine translation", "named entity recognition", "question answering",
                   "relation extraction", "summarization", "text classification",
                   "text-to-sql", "table question answering", "part-of-speech",
@@ -145,25 +112,18 @@ _AREA_KEYWORDS: list[tuple[str, list[str]]] = [
                   "reading comprehension", "dialogue", "natural language inference",
                   "information extraction", "slot filling"]),
 
-    # ── Audio ─────────────────────────────────────────────────────────────────
-    # Speech, music, sound processing
     ("audio", ["automatic speech recognition", "text-to-speech", "voice cloning",
                "audio classification", "audio generation", "audio understanding",
                "speech recognition", "speech synthesis", "speaker verification",
                "speaker diarization", "sound event detection", "music generation",
                "speech enhancement", "asr"]),
 
-    # ── Other ─────────────────────────────────────────────────────────────────
-    # Biology, tabular learning, time-series
     ("other", ["tabular learning", "tabular data", "time-series classification",
                "time-series forecasting", "time series", "forecasting",
                "anomaly detection", "biology", "drug discovery", "protein",
                "genomics", "bioinformatics", "gradient boosting", "xgboost",
                "random forest", "decision tree"]),
 
-    # ── General ───────────────────────────────────────────────────────────────
-    # RL, agents, reasoning, robotics, autonomous driving, coding, embeddings,
-    # language modeling, OCR, world models, remote sensing — broad ML methods
     ("general", ["reinforcement learning", "language model", "reasoning",
                  "autonomous driving", "robotics", "robot", "navigation",
                  "document understanding", "ocr", "optical character",
@@ -189,50 +149,24 @@ def _keyword_area(task_name: str) -> str:
 
 
 def paper_area(item: dict) -> str:
-    """
-    Derive broad PWC area — two-tier:
-      1. Keyword match on task names
-      2. Keyword match on title + abstract (fallback when tasks empty/unknown)
-    """
     tasks = item.get("tasks") or []
     for t in tasks:
         name = (t if isinstance(t, str) else t.get("name", "")).strip().lower()
         area = _keyword_area(name)
         if area != "miscellaneous":
             return area
-
-    # Fallback: title + first 300 chars of abstract
     text = (item.get("title", "") + " " + (item.get("abstract", "") or "")[:300]).lower()
     return _keyword_area(text)
 
 
-# ── PWC — reservoir sampling from HuggingFace bulk dataset ────────────────────
-
 CURRENT_YEAR = 2026
 
 def paper_weight(citations: int, year: str) -> float:
-    """
-    Combined citation + recency weight.
-
-    Citation part (log scale):
-      citations=0     → 0.69
-      citations=100   → 4.62
-      citations=10000 → 9.21
-
-    Recency multiplier (compensates for new papers having fewer citations):
-      age ≤ 1 yr  (2025–2026) → ×3.0
-      age ≤ 2 yr  (2024)      → ×2.5
-      age ≤ 3 yr  (2023)      → ×2.0
-      age ≤ 5 yr  (2021–2022) → ×1.5
-      older                   → ×1.0
-    """
     base = math.log(max(citations, 0) + 2)
-
     try:
         age = CURRENT_YEAR - int(str(year)[:4])
     except (ValueError, TypeError):
-        age = 5   # unknown year → treat as old
-
+        age = 5
     if age <= 1:
         recency = 3.0
     elif age <= 2:
@@ -243,11 +177,9 @@ def paper_weight(citations: int, year: str) -> float:
         recency = 1.5
     else:
         recency = 1.0
-
     return base * recency
 
 
-# Per-area quotas for the 20k PWC target — general/vision/language get more slots
 PWC_AREA_QUOTAS = {
     "general":       6000,
     "vision":        5000,
@@ -258,18 +190,10 @@ PWC_AREA_QUOTAS = {
     "miscellaneous":  600,
 }
 
-# Test mode: 2 papers per area
 PWC_TEST_QUOTA = 2
 
 
 def fetch_pwc_bulk(target: int, test: bool) -> list:
-    """
-    Two-pass citation-weighted sampling:
-      Pass 1 : Stream 550k → collect lightweight metadata (arxiv_id, year, area)
-      S2     : Batch-fetch real citationCounts for all papers with arxiv_id
-      Sample : Weighted A-Res reservoir sampling using real citations + recency
-      Pass 2 : Stream 550k again → collect full paper data for selected IDs only
-    """
     try:
         from datasets import load_dataset
     except ImportError:
@@ -281,24 +205,22 @@ def fetch_pwc_bulk(target: int, test: bool) -> list:
     hf_token = os.getenv("HF_TOKEN")
     quotas   = {area: PWC_TEST_QUOTA for area in PWC_AREA_QUOTAS} if test else PWC_AREA_QUOTAS
 
-    # ── Pass 1: lightweight metadata ──────────────────────────────────────────
     print("  Pass 1: streaming metadata from HF ...")
-    metadata     = []   # [{uid, arxiv_id, year, area}]
-    total_seen   = 0
+    metadata      = []
+    total_seen    = 0
     total_skipped = 0
 
-    for item in load_dataset(PWC_HF_DATASET, split="train",
-                             streaming=True, token=hf_token):
+    for item in load_dataset(PWC_HF_DATASET, split="train", streaming=True, token=hf_token):
         if not (item.get("abstract") or "").strip():
             total_skipped += 1
             continue
 
-        arxiv_id = item.get("arxiv_id") or ""
-        raw_date = item.get("date")
+        arxiv_id  = item.get("arxiv_id") or ""
+        raw_date  = item.get("date")
         published = str(raw_date.date()) if hasattr(raw_date, "date") else str(raw_date or "")
-        year  = published[:4] if published else ""
-        area  = paper_area(item)
-        uid   = arxiv_id or item.get("paper_url", "").split("/")[-1]
+        year      = published[:4] if published else ""
+        area      = paper_area(item)
+        uid       = arxiv_id or item.get("paper_url", "").split("/")[-1]
 
         metadata.append({"uid": uid, "arxiv_id": arxiv_id, "year": year, "area": area})
         total_seen += 1
@@ -311,11 +233,9 @@ def fetch_pwc_bulk(target: int, test: bool) -> list:
 
     print(f"  Pass 1 done: {total_seen:,} papers | {total_skipped:,} skipped\n")
 
-    # ── S2 citation fetch (skipped — using quota-based random sampling) ──────
-    citation_map: dict[str, int] = {}   # {arxiv_id: count}
+    citation_map: dict[str, int] = {}
     print("  S2: skipped — using pure random sampling within area quotas\n")
 
-    # ── Weighted reservoir sampling on metadata ───────────────────────────────
     print("  Sampling: weighted A-Res reservoir per area ...")
     heaps: dict[str, list] = defaultdict(list)
 
@@ -335,12 +255,10 @@ def fetch_pwc_bulk(target: int, test: bool) -> list:
         print(f"    {area:<16} {len(heaps[area]):>5}/{quotas.get(area, quotas['miscellaneous'])}")
     print()
 
-    # ── Pass 2: collect full paper data ───────────────────────────────────────
     print("  Pass 2: collecting full paper data for selected IDs ...")
     papers: list = []
 
-    for item in load_dataset(PWC_HF_DATASET, split="train",
-                             streaming=True, token=hf_token):
+    for item in load_dataset(PWC_HF_DATASET, split="train", streaming=True, token=hf_token):
         abstract = (item.get("abstract") or "").strip()
         if not abstract:
             continue
@@ -385,24 +303,19 @@ def fetch_pwc_bulk(target: int, test: bool) -> list:
         if test and len(papers) >= sum(quotas.values()):
             break
 
-    # Summary
-    print(f"\n  Reservoir summary:")
     area_map: dict[str, list] = defaultdict(list)
     for p in papers:
         area_map[p["category"]].append(p)
     for area in sorted(area_map):
         ps      = area_map[area]
         avg_cit = sum(p["citations"] for p in ps) / len(ps) if ps else 0
-        years   = [int(p["year"]) for p in ps if str(p.get("year","")).isdigit()]
+        years   = [int(p["year"]) for p in ps if str(p.get("year", "")).isdigit()]
         avg_yr  = sum(years) / len(years) if years else 0
         print(f"    {area:<16} {len(ps):>5} papers  avg_citations={avg_cit:.0f}  avg_year={avg_yr:.0f}")
 
     print(f"\n  Total PWC sampled : {len(papers):,}")
-    print(f"  Total seen (pass1): {total_seen:,}")
     return papers
 
-
-# ── OpenAlex helpers ───────────────────────────────────────────────────────────
 
 def reconstruct_abstract(inv: dict) -> str:
     if not inv:
@@ -512,8 +425,6 @@ def fetch_openalex_domain(label: str, concept_id: str, year: int, limit: int) ->
     return papers
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
 def main(test: bool):
     done = load_progress()
 
@@ -523,9 +434,8 @@ def main(test: bool):
             all_papers = json.load(f)
         print(f"Loaded {len(all_papers)} existing papers\n")
 
-    # ── Phase 1: PWC bulk (reservoir sampling) ────────────────────────────────
     print("=" * 60)
-    print(f"PHASE 1 — PWC bulk  (target: {PWC_TARGET:,} papers, reservoir sampled)")
+    print(f"PHASE 1 — PWC bulk  (target: {PWC_TARGET:,} papers)")
     print("=" * 60)
 
     if not test and "pwc_bulk" in done:
@@ -539,7 +449,6 @@ def main(test: bool):
             done.add("pwc_bulk")
             save_progress(done)
 
-    # ── Phase 2: OpenAlex year-by-year ────────────────────────────────────────
     total_oa = len(OA_DOMAINS) * len(OA_YEARS) * OA_PER_YEAR
     print("=" * 60)
     print(f"PHASE 2 — OpenAlex  ({len(OA_DOMAINS)} domains × {len(OA_YEARS)} years × {OA_PER_YEAR} = ~{total_oa:,})")
@@ -561,7 +470,6 @@ def main(test: bool):
             if not test:
                 done.add(key)
                 bucket_count += 1
-                # Save progress JSON every 10 buckets, not every single one
                 if bucket_count % 10 == 0:
                     save_progress(done)
                     deduped = save(all_papers)
@@ -569,12 +477,10 @@ def main(test: bool):
 
             time.sleep(0.5)
 
-    # Final save after all buckets
     save_progress(done)
     deduped = save(all_papers)
     print(f"  Total unique after OpenAlex: {len(deduped):,}\n")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
     final     = dedup(all_papers)
     pwc_count = sum(1 for p in final if p.get("source") == "pwc")
     oa_count  = sum(1 for p in final if p.get("source") == "openalex")
@@ -590,7 +496,6 @@ def main(test: bool):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--test", action="store_true",
-                        help="Smoke test: stream first 5k PWC + 2 papers/OA bucket")
+    parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
     main(args.test)

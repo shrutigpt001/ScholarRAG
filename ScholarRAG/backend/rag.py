@@ -27,7 +27,6 @@ _embeddings = None
 _qdrant     = None
 _client     = None
 
-# Per-session conversation buffer: {session_id: [{role, content}]}
 _memories: dict[str, list] = {}
 
 
@@ -78,7 +77,6 @@ def _github_links(payload: dict) -> list[str]:
 
 
 def _classify_query(question: str) -> str:
-    """Use Haiku to classify query as 'research' or 'conversational'."""
     resp = _client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=10,
@@ -97,15 +95,11 @@ def _classify_query(question: str) -> str:
 
 
 def query_rag(question: str, session_id: str, pdf_bytes: bytes = None) -> dict:
-    history  = _get_memory(session_id)
-
-    # Step 1: classify intent
-    intent = _classify_query(question)
-
+    history = _get_memory(session_id)
+    intent  = _classify_query(question)
     sources = []
 
     if intent == "research":
-        # Extract PDF text if provided, use it to search Qdrant
         pdf_text     = _extract_pdf_text(pdf_bytes) if pdf_bytes else None
         search_query = f"{question} {pdf_text[:1500]}" if pdf_text else question
 
@@ -119,9 +113,9 @@ def query_rag(question: str, session_id: str, pdf_bytes: bytes = None) -> dict:
 
         context_parts = []
         for r in context_hits:
-            p      = r.payload
-            lines  = [f"Title: {p.get('title', '')}"]
-            year = (p.get("published") or "")[:4]
+            p     = r.payload
+            lines = [f"Title: {p.get('title', '')}"]
+            year  = (p.get("published") or "")[:4]
             if year:
                 lines.append(f"Year: {year}")
             lines.append(f"Abstract: {p.get('summary', '')}")
@@ -130,11 +124,10 @@ def query_rag(question: str, session_id: str, pdf_bytes: bytes = None) -> dict:
                 lines.append(f"Implementation (GitHub): {', '.join(github)}")
             context_parts.append("\n".join(lines))
 
-        # Find top paper with code across all results (already sorted, code-first)
         top_with_code = next((r for r in results if _github_links(r.payload)), None)
         code_note = ""
         if top_with_code:
-            p = top_with_code.payload
+            p     = top_with_code.payload
             repos = _github_links(p)
             code_note = (
                 f"\n\nBest paper with code: \"{p.get('title', '')}\" — "
@@ -156,13 +149,13 @@ def query_rag(question: str, session_id: str, pdf_bytes: bytes = None) -> dict:
         for r in results:
             p = r.payload
             sources.append({
-                "title":        p.get("title", ""),
-                "arxiv_id":     p.get("arxiv_id", ""),
-                "authors":      p.get("authors", []),
-                "published":    p.get("published", ""),
-                "pdf_url":      p.get("pdf_url", ""),
-                "category":     p.get("category", ""),
-                "summary":      (p.get("summary", "")[:200] + "...") if p.get("summary") else "",
+                "title":           p.get("title", ""),
+                "arxiv_id":        p.get("arxiv_id", ""),
+                "authors":         p.get("authors", []),
+                "published":       p.get("published", ""),
+                "pdf_url":         p.get("pdf_url", ""),
+                "category":        p.get("category", ""),
+                "summary":         (p.get("summary", "")[:200] + "...") if p.get("summary") else "",
                 "github_repos":    _github_links(p),
                 "has_code":        len(_github_links(p)) > 0,
                 "citations":       p.get("citations", 0),
@@ -174,7 +167,6 @@ def query_rag(question: str, session_id: str, pdf_bytes: bytes = None) -> dict:
     else:
         user_msg = question
 
-    # Step 2: build messages with history
     messages = list(history)
     messages.append({"role": "user", "content": user_msg})
 
@@ -187,7 +179,6 @@ def query_rag(question: str, session_id: str, pdf_bytes: bytes = None) -> dict:
 
     answer = response.content[0].text
 
-    # Save turn to buffer
     history.append({"role": "user",      "content": question})
     history.append({"role": "assistant", "content": answer})
 
