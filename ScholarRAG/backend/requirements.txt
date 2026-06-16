@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-dotenv
+langchain
+langchain-anthropic
+langchain-huggingface
+langchain-qdrant
+langchain-community
+qdrant-client
+sentence-transformers
+anthropic
