@@ -116,6 +116,29 @@ def reconstruct_abstract(inv: dict) -> str:
     return " ".join(w for _, w in pairs)
 
 
+def ijson_load(path: Path) -> list:
+    try:
+        import ijson
+        papers = []
+        with open(path, "rb") as f:
+            for p in ijson.items(f, "item"):
+                papers.append(p)
+        return papers
+    except ImportError:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+
+def stream_write(papers: list, path: Path):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("[")
+        for i, p in enumerate(papers):
+            if i > 0:
+                f.write(",")
+            f.write("\n" + json.dumps(p, ensure_ascii=False))
+        f.write("\n]")
+
+
 def load_progress() -> set:
     if PROGRESS_FILE.exists():
         try:
@@ -139,8 +162,7 @@ def fetch_pwc(hf_token: str, test: bool) -> list:
 
     if PWC_FILE.exists():
         try:
-            with open(PWC_FILE, encoding="utf-8") as f:
-                papers = json.load(f)
+            papers = ijson_load(PWC_FILE)
             for p in papers:
                 uid = p.get("arxiv_id") or p.get("id")
                 if uid:
@@ -208,15 +230,13 @@ def fetch_pwc(hf_token: str, test: bool) -> list:
         collected += 1
 
         if collected % SAVE_EVERY == 0:
-            with open(PWC_FILE, "w", encoding="utf-8") as f:
-                json.dump(papers, f, ensure_ascii=False)
+            stream_write(papers, PWC_FILE)
             tprint(f"[PWC] checkpoint {collected:,} | skipped {skipped:,}", flush=True)
 
         if test and collected >= 500:
             break
 
-    with open(PWC_FILE, "w", encoding="utf-8") as f:
-        json.dump(papers, f, ensure_ascii=False)
+    stream_write(papers, PWC_FILE)
     tprint(f"[PWC] done — {collected:,} collected | {skipped:,} skipped")
     return papers
 
@@ -230,8 +250,7 @@ def fetch_openalex(test: bool) -> list:
 
     if OA_FILE.exists():
         try:
-            with open(OA_FILE, encoding="utf-8") as f:
-                papers = json.load(f)
+            papers = ijson_load(OA_FILE)
             for p in papers:
                 uid = p.get("doi") or p.get("id")
                 if uid:
@@ -341,8 +360,7 @@ def fetch_openalex(test: bool) -> list:
                     json.dump({"done_pairs": list(done_set)}, f)
 
                 if new % SAVE_EVERY == 0 and new > 0:
-                    with open(OA_FILE, "w", encoding="utf-8") as f:
-                        json.dump(papers, f, ensure_ascii=False)
+                    stream_write(papers, OA_FILE)
                     tprint(f"[OA] checkpoint {new:,} | {field} {year}", flush=True)
 
                 time.sleep(0.15)
@@ -352,8 +370,7 @@ def fetch_openalex(test: bool) -> list:
 
         tprint(f"[OA] {field:<25} {field_count:>5} papers")
 
-    with open(OA_FILE, "w", encoding="utf-8") as f:
-        json.dump(papers, f, ensure_ascii=False)
+    stream_write(papers, OA_FILE)
     tprint(f"[OA] done — {new:,} new papers")
     return papers
 
@@ -563,14 +580,12 @@ def main(test: bool):
 
     if pwc_skip:
         print("[Phase 1] PWC — skipping (done)")
-        with open(PWC_FILE, encoding="utf-8") as f:
-            pwc_papers = json.load(f)
+        pwc_papers = ijson_load(PWC_FILE)
         print(f"  Loaded {len(pwc_papers):,} PWC papers")
 
     if oa_skip:
         print("[Phase 2] OpenAlex — skipping (done)")
-        with open(OA_FILE, encoding="utf-8") as f:
-            oa_papers = json.load(f)
+        oa_papers = ijson_load(OA_FILE)
         print(f"  Loaded {len(oa_papers):,} OA papers")
 
     fetch_needed = (not pwc_skip) or (not oa_skip)
@@ -627,8 +642,7 @@ def main(test: bool):
                     done.add("citations_done")
                     save_progress(done)
 
-    with open(ENRICHED_FILE, "w", encoding="utf-8") as f:
-        json.dump(all_papers, f, indent=2, ensure_ascii=False)
+    stream_write(all_papers, ENRICHED_FILE)
 
     pwc_c  = sum(1 for p in all_papers if p.get("source") == "pwc")
     oa_c   = sum(1 for p in all_papers if p.get("source") == "openalex")
