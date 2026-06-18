@@ -1,54 +1,41 @@
 import json
 import time
-import math
-import random
-import heapq
-import argparse
 import requests
 import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-from collections import defaultdict
+import argparse
 from pathlib import Path
 from dotenv import load_dotenv
 import os
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv(dotenv_path=Path(__file__).parent.parent / "backend" / ".env")
 
-# ── paths ──────────────────────────────────────────────────────────────────────
-FETCH_FILE     = Path("ingestion/fetch_papers.json")       # all 565k raw papers
-ENRICHED_FILE  = Path("ingestion/papers_enriched.json")    # final 20k sampled
+FETCH_FILE     = Path("ingestion/fetch_papers.json")
+ENRICHED_FILE  = Path("ingestion/papers_enriched.json")
 PROGRESS_FILE  = Path("ingestion/fetch_progress.json")
-PWC_LINKS_FILE = Path("ingestion/pwc_links.json")          # local pre-downloaded
-SEEN_IDS_FILE  = Path("ingestion/seen_ids.json")           # lightweight dedup cache
+PWC_LINKS_FILE = Path("ingestion/pwc_links.json")
 
-# ── PWC ────────────────────────────────────────────────────────────────────────
 PWC_ABSTRACTS_DS = "pwc-archive/papers-with-abstracts"
-PWC_LINKS_DS     = "pwc-archive/links-between-paper-and-code"
-PWC_TARGET       = 30_000
 
-PWC_AREA_QUOTAS = {
-    "general":        9200,
-    "vision":         8000,
-    "language":       5800,
-    "video":          2800,
-    "audio":          2100,
-    "other":          1400,
-    "miscellaneous":   700,
-}
-
-# ── OpenAlex (citation enrichment only) ───────────────────────────────────────
 OA_BASE    = "https://api.openalex.org/works"
-OA_HEADERS = {
-    "User-Agent": "ScholarRAG/1.0 (mailto:24f3003029@ds.study.iitm.ac.in)",
-    "Accept":     "application/json",
-}
-OA_SELECT = "doi,cited_by_count,concepts,primary_location"
+OA_HEADERS = {"User-Agent": "ScholarRAG/1.0 (mailto:24f3003029@ds.study.iitm.ac.in)"}
 
-CURRENT_YEAR      = 2025
-GITHUB_MULTIPLIER = 1.5
+OA_FIELDS = [
+    "Medicine",
+    "Biology",
+    "Astronomy",
+    "Chemistry",
+    "Environmental Science",
+    "Psychology",
+    "Economics",
+    "Physics",
+    "Political Science",
+    "History",
+]
+OA_YEARS    = list(range(2014, 2026))  # 12 years
+OA_PER_YEAR = 100
 
-
-# ── helpers ────────────────────────────────────────────────────────────────────
+CURRENT_YEAR = 2025
 
 _AREA_KEYWORDS: list[tuple[str, list[str]]] = [
     ("vision",   ["image classification", "image generation", "image segmentation",
@@ -102,24 +89,15 @@ def paper_area(item: dict) -> str:
     return _keyword_area(text)
 
 
-def recency_factor(year: str) -> float:
-    try:
-        age = max(0, CURRENT_YEAR - int(str(year)[:4]))
-    except (ValueError, TypeError):
-        age = 6
-    return 1.0 + 1.5 * math.exp(-0.25 * age)
-
-
-def star_score(stars: int) -> float:
-    return math.log(max(stars, 0) + 2)
-
-
-def pwc_weight(year: str, stars: int, num_repos: int, is_official: bool) -> float:
-    recency  = recency_factor(year)
-    repos_s  = math.log(num_repos + 1) + 1.0
-    official = 2.0 if is_official else 1.0
-    has_code = GITHUB_MULTIPLIER if num_repos > 0 else 1.0
-    return recency * repos_s * official * has_code
+def reconstruct_abstract(inv: dict) -> str:
+    if not inv:
+        return ""
+    pairs = []
+    for word, positions in inv.items():
+        for pos in positions:
+            pairs.append((pos, word))
+    pairs.sort()
+    return " ".join(w for _, w in pairs)
 
 
 def load_progress() -> set:
@@ -138,10 +116,12 @@ def save_progress(done: set):
 
 
 def load_fetch_papers() -> tuple[list, set]:
-    if FETCH_FILE.exists():
+    if not FETCH_FILE.exists():
+        return [], set()
+    try:
         import ijson
         papers = []
-        seen = set()
+        seen   = set()
         with open(FETCH_FILE, "rb") as f:
             for p in ijson.items(f, "item"):
                 papers.append(p)
@@ -151,19 +131,17 @@ def load_fetch_papers() -> tuple[list, set]:
                         seen.add(v)
                         break
         return papers, seen
-    return [], set()
-
-
-def load_seen_ids_only() -> set:
-    if SEEN_IDS_FILE.exists():
-        with open(SEEN_IDS_FILE, encoding="utf-8") as f:
-            return set(json.load(f))
-    return set()
-
-
-def save_seen_ids(seen_ids: set):
-    with open(SEEN_IDS_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen_ids), f)
+    except ImportError:
+        with open(FETCH_FILE, encoding="utf-8") as f:
+            papers = json.load(f)
+        seen = set()
+        for p in papers:
+            for k in ("arxiv_id", "doi", "id"):
+                v = p.get(k, "")
+                if v:
+                    seen.add(v)
+                    break
+        return papers, seen
 
 
 def save_fetch_papers(papers: list):
@@ -171,9 +149,7 @@ def save_fetch_papers(papers: list):
         json.dump(papers, f, indent=2, ensure_ascii=False)
 
 
-
-
-# ── Phase 1: stream PWC abstracts ─────────────────────────────────────────────
+# ── Phase 1 ────────────────────────────────────────────────────────────────────
 
 def fetch_pwc(seen_ids: set, hf_token: str, test: bool) -> list:
     try:
@@ -182,10 +158,10 @@ def fetch_pwc(seen_ids: set, hf_token: str, test: bool) -> list:
         print("ERROR: install `datasets` package")
         return []
 
-    print("\n[Phase 1] Streaming PWC papers-with-abstracts ...")
-    papers   = []
-    skipped  = 0
-    total    = 0
+    print("\n[Phase 1] Streaming all PWC papers-with-abstracts ...")
+    papers  = []
+    skipped = 0
+    total   = 0
 
     for item in load_dataset(PWC_ABSTRACTS_DS, split="train", streaming=True, token=hf_token):
         abstract = (item.get("abstract") or "").strip()
@@ -200,7 +176,6 @@ def fetch_pwc(seen_ids: set, hf_token: str, test: bool) -> list:
             skipped += 1
             continue
 
-        # english only — PWC abstracts are mostly english but filter just in case
         lang = (item.get("language") or "en").lower()
         if lang and lang not in ("en", "english", ""):
             skipped += 1
@@ -215,52 +190,150 @@ def fetch_pwc(seen_ids: set, hf_token: str, test: bool) -> list:
         year      = published[:4] if published else ""
 
         papers.append({
-            "id":               uid,
-            "arxiv_id":         arxiv_id,
-            "title":            item.get("title", ""),
-            "authors":          item.get("authors") or [],
-            "summary":          abstract,
-            "published":        published,
-            "year":             year,
-            "pdf_url":          f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else "",
-            "category":         paper_area(item),
-            "journal":          "",
-            "doi":              (item.get("doi") or "").strip(),
-            "citations":        0,
-            "fields_of_study":  [t if isinstance(t, str) else t.get("name", "")
-                                  for t in (item.get("tasks") or [])],
-            "source":           "pwc",
-            "github_repos":     [],
-            "has_code":         False,
-            "language":         "en",
+            "id":              uid,
+            "arxiv_id":        arxiv_id,
+            "title":           item.get("title", ""),
+            "authors":         item.get("authors") or [],
+            "summary":         abstract,
+            "published":       published,
+            "year":            year,
+            "pdf_url":         f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else "",
+            "category":        paper_area(item),
+            "journal":         "",
+            "doi":             (item.get("doi") or "").strip(),
+            "citations":       0,
+            "fields_of_study": [t if isinstance(t, str) else t.get("name", "")
+                                 for t in (item.get("tasks") or [])],
+            "source":          "pwc",
+            "github_repos":    [],
+            "has_code":        False,
+            "language":        "en",
         })
 
         total += 1
         if total % 50_000 == 0:
-            print(f"  ... {total:,} PWC papers collected", flush=True)
+            print(f"  ... {total:,} collected", flush=True)
 
-        if test and total >= 1_000:
+        if test and total >= 500:
             break
 
     print(f"  PWC done: {total:,} collected | {skipped:,} skipped\n")
     return papers
 
 
-# ── Phase 3: enrich with GitHub links from PWC links dataset ──────────────────
+# ── Phase 2 ────────────────────────────────────────────────────────────────────
+
+def fetch_openalex(seen_ids: set, test: bool) -> list:
+    print("[Phase 2] Fetching OpenAlex non-tech papers ...")
+    papers = []
+    years  = OA_YEARS[:2] if test else OA_YEARS
+    per_yr = 5 if test else OA_PER_YEAR
+
+    for field in OA_FIELDS:
+        field_count = 0
+        for year in years:
+            try:
+                r = requests.get(
+                    OA_BASE,
+                    headers=OA_HEADERS,
+                    params={
+                        "filter":   f"concepts.display_name:{field},publication_year:{year},has_abstract:true",
+                        "sort":     "cited_by_count:desc",
+                        "per_page": per_yr,
+                        "select":   "id,doi,display_name,authorships,publication_year,"
+                                    "primary_location,abstract_inverted_index,"
+                                    "cited_by_count,concepts,ids",
+                    },
+                    timeout=30,
+                )
+                if r.status_code == 429:
+                    print(f"  Rate limited — sleeping 30s")
+                    time.sleep(30)
+                    continue
+                if r.status_code != 200:
+                    continue
+
+                for w in r.json().get("results", []):
+                    abstract = reconstruct_abstract(w.get("abstract_inverted_index"))
+                    if not abstract:
+                        continue
+
+                    doi    = (w.get("doi") or "").replace("https://doi.org/", "").strip()
+                    oa_id  = w.get("id", "").split("/")[-1]
+                    uid    = doi or oa_id
+
+                    if not uid or uid in seen_ids:
+                        continue
+                    seen_ids.add(uid)
+                    if doi:
+                        seen_ids.add(doi)
+
+                    authors = [
+                        (a.get("author") or {}).get("display_name", "")
+                        for a in (w.get("authorships") or [])
+                        if (a.get("author") or {}).get("display_name")
+                    ]
+
+                    year_str = str(w.get("publication_year") or "")
+                    loc      = w.get("primary_location") or {}
+                    src      = loc.get("source") or {}
+                    pdf_url  = loc.get("pdf_url") or loc.get("landing_page_url") or ""
+
+                    concepts = [
+                        c.get("display_name", "")
+                        for c in (w.get("concepts") or [])
+                        if c.get("score", 0) >= 0.3
+                    ]
+
+                    ext_ids  = w.get("ids") or {}
+                    arxiv_id = (ext_ids.get("arxiv") or "").replace("https://arxiv.org/abs/", "").strip()
+
+                    papers.append({
+                        "id":              uid,
+                        "arxiv_id":        arxiv_id,
+                        "title":           w.get("display_name", ""),
+                        "authors":         authors,
+                        "summary":         abstract,
+                        "published":       f"{year_str}-01-01",
+                        "year":            year_str,
+                        "pdf_url":         pdf_url,
+                        "category":        field.lower().replace(" ", "_"),
+                        "journal":         src.get("display_name", ""),
+                        "doi":             doi,
+                        "citations":       w.get("cited_by_count", 0),
+                        "fields_of_study": concepts,
+                        "source":          "openalex",
+                        "github_repos":    [],
+                        "has_code":        False,
+                        "language":        "en",
+                    })
+                    field_count += 1
+
+                time.sleep(0.15)
+
+            except Exception as e:
+                print(f"  Error {field} {year}: {e}")
+
+        print(f"  {field:<25} {field_count:>5} papers")
+
+    print(f"  OpenAlex done: {len(papers):,} papers\n")
+    return papers
+
+
+# ── Phase 3a ───────────────────────────────────────────────────────────────────
 
 def enrich_github(papers: list, test: bool):
-    print("[Phase 3a] Loading GitHub links from local pwc_links.json ...")
+    print("[Phase 3a] Loading GitHub links from pwc_links.json ...")
 
     if not PWC_LINKS_FILE.exists():
-        print(f"  WARNING: {PWC_LINKS_FILE} not found — skipping GitHub enrichment")
+        print(f"  WARNING: {PWC_LINKS_FILE} not found — skipping")
         return
 
     with open(PWC_LINKS_FILE, encoding="utf-8") as f:
         pwc_links: dict = json.load(f)
 
-    print(f"  Loaded {len(pwc_links):,} arxiv_id entries from pwc_links.json")
+    print(f"  Loaded {len(pwc_links):,} entries")
 
-    # build arxiv_id → paper index
     arxiv_index: dict[str, int] = {}
     for i, p in enumerate(papers):
         aid = p.get("arxiv_id", "")
@@ -286,119 +359,112 @@ def enrich_github(papers: list, test: bool):
                 max_stars = stars
             if repo.get("is_official"):
                 is_official = True
-        p["has_code"]    = len(p["github_repos"]) > 0
-        p["max_stars"]   = max_stars
-        p["num_repos"]   = len(p["github_repos"])
-        p["is_official"] = is_official
-        matched += 1
+        if p["github_repos"]:
+            p["has_code"]    = True
+            p["max_stars"]   = max_stars
+            p["num_repos"]   = len(p["github_repos"])
+            p["is_official"] = is_official
+            matched += 1
 
     print(f"  GitHub links matched: {matched:,} papers\n")
 
 
-# ── Phase 3b: enrich PWC papers with citations from OpenAlex ──────────────────
+# ── Phase 3b ───────────────────────────────────────────────────────────────────
 
-def enrich_citations_s2(papers: list, test: bool):
-    print("[Phase 3b] Enriching PWC paper citations via Semantic Scholar (bulk) ...")
+def enrich_citations_openalex(papers: list, test: bool):
+    print("[Phase 3b] Enriching citations via OpenAlex ...")
 
-    s2_key     = os.getenv("S2_API_KEY", "")
-    headers    = {"x-api-key": s2_key} if s2_key else {}
-    s2_url     = "https://api.semanticscholar.org/graph/v1/paper/batch"
-    batch_size = 500
+    doi_index   = {}
+    arxiv_index = {}
 
-    pwc_papers = [p for p in papers if p.get("source") == "pwc" and p.get("arxiv_id")]
+    for p in papers:
+        if p.get("source") == "openalex":
+            continue
+        doi      = (p.get("doi") or "").strip()
+        arxiv_id = (p.get("arxiv_id") or "").strip()
+        if doi:
+            doi_index[doi] = p
+        elif arxiv_id:
+            arxiv_index[arxiv_id] = p
+
+    print(f"  {len(doi_index):,} via DOI  |  {len(arxiv_index):,} via arxiv ID")
+
+    enriched   = 0
+    batch_size = 100
+
+    doi_list = list(doi_index.keys())
     if test:
-        pwc_papers = pwc_papers[:200]
+        doi_list = doi_list[:200]
 
-    arxiv_index = {p["arxiv_id"]: p for p in pwc_papers}
-    total       = len(pwc_papers)
-    enriched    = 0
-
-    print(f"  {total:,} PWC papers with arxiv_id to enrich ...")
-
-    for i in range(0, total, batch_size):
-        batch = pwc_papers[i:i + batch_size]
-        ids   = [f"ARXIV:{p['arxiv_id']}" for p in batch]
+    for i in range(0, len(doi_list), batch_size):
+        batch = doi_list[i:i + batch_size]
         try:
-            r = requests.post(
-                s2_url,
-                headers={**headers, "Content-Type": "application/json"},
-                params={"fields": "externalIds,citationCount,influentialCitationCount,journal,fieldsOfStudy"},
-                json={"ids": ids},
+            r = requests.get(
+                OA_BASE,
+                headers=OA_HEADERS,
+                params={
+                    "filter":   "doi:" + "|".join(batch),
+                    "select":   "doi,cited_by_count",
+                    "per_page": batch_size,
+                },
                 timeout=30,
             )
-
             if r.status_code == 429:
-                wait = int(r.headers.get("Retry-After", 60))
-                print(f"    Rate limited — sleeping {wait}s")
-                time.sleep(wait)
+                time.sleep(30)
                 continue
-
             if r.status_code == 200:
-                for w in r.json():
-                    if not w:
-                        continue
-                    ext      = w.get("externalIds") or {}
-                    arxiv_id = (ext.get("ArXiv") or "").strip()
-                    p        = arxiv_index.get(arxiv_id)
-                    if not p:
-                        continue
-                    p["citations"] = w.get("citationCount", 0)
-                    if not p.get("journal") and w.get("journal"):
-                        p["journal"] = w["journal"].get("name", "")
-                    if not p.get("fields_of_study") and w.get("fieldsOfStudy"):
-                        p["fields_of_study"] = w["fieldsOfStudy"]
-                    enriched += 1
-            else:
-                print(f"  S2 error {r.status_code} — skipping batch")
-
+                for w in r.json().get("results", []):
+                    doi = (w.get("doi") or "").replace("https://doi.org/", "").strip()
+                    p   = doi_index.get(doi)
+                    if p:
+                        p["citations"] = w.get("cited_by_count", 0)
+                        enriched += 1
         except Exception as e:
-            print(f"  Batch error: {e}")
+            print(f"  DOI batch error: {e}")
+        time.sleep(0.15)
 
-        if (i // batch_size) % 10 == 0:
-            print(f"  ... {min(i + batch_size, total):,}/{total:,} processed | {enriched:,} enriched", flush=True)
+        if i > 0 and i % 10_000 == 0:
+            print(f"  DOI {i:,}/{len(doi_list):,} | enriched: {enriched:,}", flush=True)
 
-        time.sleep(1.1)
+    arxiv_list = list(arxiv_index.keys())
+    if test:
+        arxiv_list = arxiv_list[:200]
 
+    for i in range(0, len(arxiv_list), batch_size):
+        batch = arxiv_list[i:i + batch_size]
+        try:
+            r = requests.get(
+                OA_BASE,
+                headers=OA_HEADERS,
+                params={
+                    "filter":   "ids.arxiv:" + "|".join(
+                        f"https://arxiv.org/abs/{aid}" for aid in batch
+                    ),
+                    "select":   "ids,cited_by_count",
+                    "per_page": batch_size,
+                },
+                timeout=30,
+            )
+            if r.status_code == 429:
+                time.sleep(30)
+                continue
+            if r.status_code == 200:
+                for w in r.json().get("results", []):
+                    ext = w.get("ids") or {}
+                    aid = (ext.get("arxiv") or "").replace("https://arxiv.org/abs/", "").strip()
+                    p   = arxiv_index.get(aid)
+                    if p:
+                        p["citations"] = w.get("cited_by_count", 0)
+                        enriched += 1
+        except Exception as e:
+            print(f"  ArXiv batch error: {e}")
+        time.sleep(0.15)
+
+        if i > 0 and i % 10_000 == 0:
+            print(f"  ArXiv {i:,}/{len(arxiv_list):,} | enriched: {enriched:,}", flush=True)
+
+    total = len(doi_index) + len(arxiv_index)
     print(f"  Citations enriched: {enriched:,}/{total:,}\n")
-
-
-# ── Phase 4: weighted sampling ─────────────────────────────────────────────────
-
-def sample_papers(all_papers: list, test: bool) -> list:
-    print("[Phase 4] Sampling final 20k PWC papers ...")
-
-    pwc_papers = [p for p in all_papers if p.get("source") == "pwc"]
-    print(f"  Pool: {len(pwc_papers):,} PWC papers")
-
-    NO_CODE_RATIO = 0.30
-    quotas = {area: max(1, q // 100) for area, q in PWC_AREA_QUOTAS.items()} if test else PWC_AREA_QUOTAS
-    heaps_code:    dict[str, list] = defaultdict(list)
-    heaps_nocode:  dict[str, list] = defaultdict(list)
-
-    for p in pwc_papers:
-        w    = pwc_weight(p.get("year", ""), p.get("max_stars", 0), p.get("num_repos", 0), p.get("is_official", False))
-        area = p.get("category", "miscellaneous")
-        key  = p.get("id", "")
-        if p.get("has_code"):
-            quota = max(1, int(quotas.get(area, quotas["miscellaneous"]) * (1 - NO_CODE_RATIO)))
-            heap  = heaps_code[area]
-        else:
-            quota = max(1, int(quotas.get(area, quotas["miscellaneous"]) * NO_CODE_RATIO))
-            heap  = heaps_nocode[area]
-        if len(heap) < quota:
-            heapq.heappush(heap, (w, key, p))
-        elif w > heap[0][0]:
-            heapq.heapreplace(heap, (w, key, p))
-
-    final = (
-        [p for heap in heaps_code.values()   for _, _, p in heap] +
-        [p for heap in heaps_nocode.values() for _, _, p in heap]
-    )
-    heaps = {area: heaps_code.get(area, []) + heaps_nocode.get(area, []) for area in quotas}
-    print(f"  Selected: {len(final):,}")
-    for area in sorted(heaps):
-        print(f"    {area:<16} {len(heaps[area]):>5}")
-    return final
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -407,25 +473,31 @@ def main(test: bool):
     hf_token = os.getenv("HF_TOKEN", "")
     done     = load_progress()
 
-    pwc_done = not test and "pwc_abstracts" in done
-
     all_papers, seen_ids = load_fetch_papers()
     print(f"Loaded {len(all_papers):,} existing papers from {FETCH_FILE}\n")
 
-    # Phase 1 — PWC abstracts
-    if pwc_done:
+    if not test and "pwc_abstracts" in done:
         print("[Phase 1] PWC abstracts — skipping (done)\n")
     else:
         pwc_papers = fetch_pwc(seen_ids, hf_token, test)
         all_papers.extend(pwc_papers)
         save_fetch_papers(all_papers)
-        save_seen_ids(seen_ids)
         print(f"  Saved {len(all_papers):,} papers after PWC\n")
         if not test:
             done.add("pwc_abstracts")
             save_progress(done)
 
-    # Phase 3a — GitHub links from PWC links dataset
+    if not test and "openalex_papers" in done:
+        print("[Phase 2] OpenAlex papers — skipping (done)\n")
+    else:
+        oa_papers = fetch_openalex(seen_ids, test)
+        all_papers.extend(oa_papers)
+        save_fetch_papers(all_papers)
+        print(f"  Saved {len(all_papers):,} papers after OpenAlex\n")
+        if not test:
+            done.add("openalex_papers")
+            save_progress(done)
+
     if not test and "github_enriched" in done:
         print("[Phase 3a] GitHub links — skipping (done)\n")
     else:
@@ -435,28 +507,29 @@ def main(test: bool):
             done.add("github_enriched")
             save_progress(done)
 
-    # Phase 3b — Citations for PWC papers via OpenAlex
     if not test and "citations_enriched" in done:
         print("[Phase 3b] Citations — skipping (done)\n")
     else:
-        enrich_citations_s2(all_papers, test)
+        enrich_citations_openalex(all_papers, test)
         save_fetch_papers(all_papers)
         if not test:
             done.add("citations_enriched")
             save_progress(done)
 
-    # Phase 4 — Sample final 20k
-    final = sample_papers(all_papers, test)
-
-    code_c = sum(1 for p in final if p.get("has_code"))
-
     with open(ENRICHED_FILE, "w", encoding="utf-8") as f:
-        json.dump(final, f, indent=2, ensure_ascii=False)
+        json.dump(all_papers, f, indent=2, ensure_ascii=False)
+
+    pwc_c  = sum(1 for p in all_papers if p.get("source") == "pwc")
+    oa_c   = sum(1 for p in all_papers if p.get("source") == "openalex")
+    code_c = sum(1 for p in all_papers if p.get("has_code"))
+    cit_c  = sum(1 for p in all_papers if p.get("citations", 0) > 0)
 
     print(f"\n{'='*60}")
-    print(f"DONE — {len(final):,} papers saved to {ENRICHED_FILE}")
+    print(f"DONE — {len(all_papers):,} papers → {ENRICHED_FILE}")
+    print(f"  PWC             : {pwc_c:,}")
+    print(f"  OpenAlex        : {oa_c:,}")
     print(f"  With GitHub     : {code_c:,}")
-    print(f"  With citations  : {sum(1 for p in final if p.get('citations', 0) > 0):,}")
+    print(f"  With citations  : {cit_c:,}")
     print(f"{'='*60}")
 
 
