@@ -33,8 +33,8 @@ OA_HEADERS = {"User-Agent": "ScholarRAG/1.0 (mailto:24f3003029@ds.study.iitm.ac.
 OA_FIELDS = {
     "Medicine":             "C71924100",
     "Biology":              "C86803240",
-    "Astronomy":            "C185592680",
-    "Chemistry":            "C185333966",
+    "Astronomy":            "C1276947",
+    "Chemistry":            "C185592680",
     "Environmental Science":"C39432304",
     "Psychology":           "C15744967",
     "Economics":            "C162324750",
