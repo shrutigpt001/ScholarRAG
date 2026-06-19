@@ -448,12 +448,13 @@ def enrich_github(papers: list, test: bool):
 
 S2_BATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/batch"
 S2_FIELDS    = "citationCount"
+S2_SLEEP     = 10  # seconds between batches
 
 
 def enrich_citations(papers: list, test: bool):
     s2_key = os.getenv("S2_API_KEY", "")
     s2_headers = {"x-api-key": s2_key} if s2_key else {}
-    tprint(f"[Citations] S2 key: {'SET' if s2_key else 'MISSING — will be rate limited'}")
+    tprint(f"[Citations] S2 key: {'SET' if s2_key else 'MISSING'}")
 
     cache: dict = {}
     if CIT_CACHE.exists():
@@ -464,7 +465,6 @@ def enrich_citations(papers: list, test: bool):
             cache = {}
 
     s2_index: dict[str, dict] = {}
-
     for p in papers:
         if p.get("source") == "openalex":
             continue
@@ -487,16 +487,17 @@ def enrich_citations(papers: list, test: bool):
 
     enriched   = 0
     batch_size = 500
-    SAVE_EVERY = 5_000
+    SAVE_EVERY = 10_000
 
     s2_keys = list(s2_index.keys())
     if test:
-        s2_keys = s2_keys[:200]
+        s2_keys = s2_keys[:1000]
 
-    for i in range(0, len(s2_keys), batch_size):
+    total = len(s2_keys)
+    for i in range(0, total, batch_size):
         batch = s2_keys[i:i + batch_size]
         while True:
-            time.sleep(1)
+            time.sleep(S2_SLEEP)
             try:
                 r = requests.post(
                     S2_BATCH_URL,
@@ -525,15 +526,16 @@ def enrich_citations(papers: list, test: bool):
                 enriched += 1
             break
 
+        batch_num = i // batch_size + 1
+        if batch_num % 50 == 0:
+            tprint(f"[Citations] {i + len(batch):,}/{total:,} processed | {enriched:,} enriched", flush=True)
         if enriched > 0 and enriched % SAVE_EVERY == 0:
             with open(CIT_CACHE, "w", encoding="utf-8") as f:
                 json.dump(cache, f)
-            tprint(f"[Citations] checkpoint {enriched:,} enriched", flush=True)
 
     with open(CIT_CACHE, "w", encoding="utf-8") as f:
         json.dump(cache, f)
-
-    tprint(f"[Citations] done — {enriched:,}/{len(s2_keys):,} enriched")
+    tprint(f"[Citations] done — {enriched:,}/{total:,} enriched")
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
@@ -586,9 +588,22 @@ def main(test: bool):
     cit_skip    = not test and "citations_done" in done
 
     if github_skip:
-        print("[Phase 3a] GitHub — skipping (done)")
+        print("[Phase 3a] GitHub — skipping (done), re-applying from cache ...")
+        enrich_github(all_papers, test)
     if cit_skip:
-        print("[Phase 3b] Citations — skipping (done)")
+        print("[Phase 3b] Citations — skipping (done), re-applying from cache ...")
+        if CIT_CACHE.exists():
+            with open(CIT_CACHE, encoding="utf-8") as f:
+                _cache = json.load(f)
+            _applied = 0
+            for p in all_papers:
+                doi      = (p.get("doi") or "").strip()
+                arxiv_id = (p.get("arxiv_id") or "").strip()
+                key = f"DOI:{doi}" if doi else (f"arXiv:{arxiv_id}" if arxiv_id else None)
+                if key and key in _cache:
+                    p["citations"] = _cache[key]
+                    _applied += 1
+            print(f"[Citations] Applied {_applied:,} from cache")
 
     enrich_needed = (not github_skip) or (not cit_skip)
     if enrich_needed:
