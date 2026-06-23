@@ -174,7 +174,7 @@ def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, prel
         search_text = f"{question} {pdf_text[:1500]}" if pdf_text else question
 
         SCORE_THRESHOLD = 0.35
-        TARGET          = 3
+        TARGET          = 2
 
         candidates   = _search(search_text, k=8)
         filtered     = [r for r in candidates if r.score >= SCORE_THRESHOLD]
@@ -187,13 +187,13 @@ def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, prel
             results = without_code[:TARGET]
 
         context_parts = []
-        for r in results[:3]:
+        for r in results[:2]:
             p     = r.payload
             lines = [f"Title: {p.get('title', '')}"]
             year  = (p.get("published") or "")[:4]
             if year:
                 lines.append(f"Year: {year}")
-            lines.append(f"Abstract: {p.get('summary', '')}")
+            lines.append(f"Abstract: {(p.get('summary', '')[:400])}")
             github = _github_links(p)
             if github:
                 lines.append(f"Implementation (GitHub): {', '.join(github)}")
@@ -247,7 +247,7 @@ def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, prel
     return api_messages, sources, history
 
 
-def query_rag(question: str, session_id: str, pdf_bytes: bytes = None, preloaded_history: list = None, model: str = "claude-sonnet-4-6") -> dict:
+def query_rag(question: str, session_id: str, pdf_bytes: bytes = None, preloaded_history: list = None, model: str = "claude-haiku-4-5-20251001") -> dict:
     api_messages, sources, history = _prepare_query(question, session_id, pdf_bytes, preloaded_history)
 
     max_tool_rounds = 3
@@ -285,7 +285,7 @@ def query_rag(question: str, session_id: str, pdf_bytes: bytes = None, preloaded
     return {"answer": answer, "sources": sources}
 
 
-async def query_rag_stream(question: str, session_id: str, pdf_bytes: bytes = None, preloaded_history: list = None, model: str = "claude-sonnet-4-6"):
+async def query_rag_stream(question: str, session_id: str, pdf_bytes: bytes = None, preloaded_history: list = None, model: str = "claude-haiku-4-5-20251001"):
     import json
     import asyncio
     yield f"data: {json.dumps({'type': 'status', 'text': 'Searching papers...'})}\n\n"

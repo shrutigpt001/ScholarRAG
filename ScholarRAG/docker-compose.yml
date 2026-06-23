@@ -1,0 +1,29 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - /home/ubuntu/ScholarRAG/ScholarRAG/qdrant_local:/qdrant_local
+    env_file:
+      - ./backend/.env
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://13.206.126.59:8000
+    depends_on:
+      - backend
+
+  ingestembed:
+    build: ./backend
+    command: python /app/ingestembed.py
+    volumes:
+      - /home/ubuntu/ScholarRAG/ScholarRAG/qdrant_local:/qdrant_local
+      - /home/ubuntu/ScholarRAG/ScholarRAG/ingestion:/app/ingestion
+    env_file:
+      - ./backend/.env
+    profiles:
+      - ingest

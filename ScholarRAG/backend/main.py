@@ -86,7 +86,7 @@ def login(req: LoginRequest):
 async def query(
     question:   str                  = Form(...),
     session_id: str                  = Form("default"),
-    model:      str                  = Form("claude-sonnet-4-6"),
+    model:      str                  = Form("claude-haiku-4-5-20251001"),
     file:       Optional[UploadFile] = File(None),
     user:       dict                 = Depends(get_current_user),
 ):
@@ -152,7 +152,7 @@ async def query(
 async def query_stream(
     question:   str                  = Form(...),
     session_id: str                  = Form("default"),
-    model:      str                  = Form("claude-sonnet-4-6"),
+    model:      str                  = Form("claude-haiku-4-5-20251001"),
     file:       Optional[UploadFile] = File(None),
     user:       dict                 = Depends(get_current_user),
 ):
