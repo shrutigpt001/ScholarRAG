@@ -1,29 +1,30 @@
 services:
+  qdrant:
+    image: akritiyadav/scholarrag:qdrant-v1
+    ports:
+      - "6333:6333"
+    restart: always
+
   backend:
-    build: ./backend
+    image: akritiyadav/scholarrag:backend-v12
     ports:
       - "8000:8000"
     volumes:
-      - /home/ubuntu/ScholarRAG/ScholarRAG/qdrant_local:/qdrant_local
+      - ./users.db:/app/data/users.db
     env_file:
-      - ./backend/.env
+      - ./.env
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_SVC_PORT=6333
+      - DB_PATH=/app/data/users.db
+    depends_on:
+      - qdrant
+    restart: always
 
   frontend:
-    build: ./frontend
+    image: akritiyadav/scholarrag:frontend-v1
     ports:
-      - "5173:5173"
-    environment:
-      - VITE_API_URL=http://13.206.126.59:8000
+      - "80:80"
     depends_on:
       - backend
-
-  ingestembed:
-    build: ./backend
-    command: python /app/ingestembed.py
-    volumes:
-      - /home/ubuntu/ScholarRAG/ScholarRAG/qdrant_local:/qdrant_local
-      - /home/ubuntu/ScholarRAG/ScholarRAG/ingestion:/app/ingestion
-    env_file:
-      - ./backend/.env
-    profiles:
-      - ingest
+    restart: always

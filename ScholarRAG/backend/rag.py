@@ -14,6 +14,8 @@ from sentence_transformers import CrossEncoder
 _qdrant_base   = os.path.join(os.path.dirname(__file__), "..", "qdrant_local")
 _qdrant_nested = os.path.join(_qdrant_base, "qdrant_local")
 QDRANT_PATH    = _qdrant_nested if os.path.isdir(_qdrant_nested) else _qdrant_base
+QDRANT_HOST    = os.getenv("QDRANT_HOST")
+QDRANT_PORT    = int(os.getenv("QDRANT_SVC_PORT", "6333"))
 COLLECTION  = "papers"
 MODEL_NAME  = "all-MiniLM-L6-v2"
 
@@ -47,7 +49,10 @@ def init():
     global _embeddings, _qdrant, _client, _async_client, _cross_encoder
 
     _embeddings    = HuggingFaceEmbeddings(model_name=MODEL_NAME)
-    _qdrant        = QdrantClient(path=QDRANT_PATH)
+    if QDRANT_HOST:
+        _qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+    else:
+        _qdrant = QdrantClient(path=QDRANT_PATH)
     _client        = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     _async_client  = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")

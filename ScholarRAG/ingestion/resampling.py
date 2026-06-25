@@ -3,31 +3,22 @@ import math
 from pathlib import Path
 from collections import defaultdict
 
+
+
 ENRICHED_FILE = Path("ingestion/papers_enriched.json")
 OUTPUT_FILE   = Path("ingestion/papers_final.json")
 
-PWC_TARGET = 10_000
+PWC_TARGET = 12_000
 
 PWC_AREA_QUOTAS = {
-    "general":       3100,
-    "vision":        2600,
-    "language":      2000,
-    "video":          800,
-    "audio":          600,
-    "other":          500,
-    "miscellaneous":  400,
+    "general":       3720,
+    "vision":        3120,
+    "language":      2400,
+    "video":          960,
+    "audio":          720,
+    "other":          600,
+    "miscellaneous":  480,
 }
-
-CURRENT_YEAR = 2025
-
-
-def recency_factor(year: str) -> float:
-    try:
-        age = max(0, CURRENT_YEAR - int(str(year)[:4]))
-    except (ValueError, TypeError):
-        age = 6
-    return 1.0 + 1.5 * math.exp(-0.25 * age)
-
 
 def quality_score(p: dict) -> float:
     citations  = p.get("citations", 0) or 0
@@ -35,14 +26,12 @@ def quality_score(p: dict) -> float:
     num_repos  = p.get("num_repos", 0) or 0
     is_off     = p.get("is_official", False)
     has_code   = p.get("has_code", False)
-    year       = p.get("year", "") or ""
 
     score  = math.log(citations + 1) * 2.0
     score += math.log(stars + 1)     * 1.5
     score += math.log(num_repos + 1) * 0.5
     score += 2.0 if is_off  else 0.0
     score += 1.0 if has_code else 0.0
-    score *= recency_factor(year)
     return score
 
 

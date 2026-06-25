@@ -1,3 +1,4 @@
+import os
 import json
 import time
 import torch
@@ -6,15 +7,18 @@ from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import (Distance, VectorParams, PointStruct)
 
+_final    = Path("ingestion/papers_final.json")
 _enriched = Path("ingestion/papers_enriched.json")
 _base     = Path("ingestion/papers.json")
-PAPERS_FILE   = _enriched if _enriched.exists() else _base
+PAPERS_FILE   = _final if _final.exists() else (_enriched if _enriched.exists() else _base)
 QDRANT_PATH   = "./qdrant_local"
+QDRANT_HOST   = os.environ.get("QDRANT_HOST")
+QDRANT_SVC_PORT = int(os.environ.get("QDRANT_SVC_PORT", "6333"))
 COLLECTION    = "papers"
 MODEL_NAME    = "all-MiniLM-L6-v2"
 VECTOR_DIM    = 384
-PWC_LIMIT     = 15_000
-OA_LIMIT      = 5_000
+PWC_LIMIT     = 20_000
+OA_LIMIT      = 20_000
 DEVICE        = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE    = 256 if DEVICE == "cuda" else 64
 
@@ -37,8 +41,12 @@ print(f"   Total        : {len(papers):,}\n")
 print(f"Loading embedding model '{MODEL_NAME}' on {DEVICE.upper()} ...")
 model = SentenceTransformer(MODEL_NAME, device=DEVICE)
 
-print(f"Opening local Qdrant storage at '{QDRANT_PATH}' ...")
-client = QdrantClient(path=QDRANT_PATH)
+if QDRANT_HOST:
+    print(f"Connecting to Qdrant server at {QDRANT_HOST}:{QDRANT_SVC_PORT} ...")
+    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_SVC_PORT)
+else:
+    print(f"Opening local Qdrant storage at '{QDRANT_PATH}' ...")
+    client = QdrantClient(path=QDRANT_PATH)
 
 existing = [c.name for c in client.get_collections().collections]
 if COLLECTION in existing:
