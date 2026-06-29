@@ -2,11 +2,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
-import io
 import certifi
 import requests
 import anthropic
-import pdfplumber
+import fitz
 from langchain_huggingface import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 from sentence_transformers import CrossEncoder
@@ -60,12 +59,26 @@ def init():
 
 def _extract_pdf_text(pdf_bytes: bytes) -> str:
     text_parts = []
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
-            t = page.extract_text()
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        for page in doc:
+            t = page.get_text("text")
             if t:
                 text_parts.append(t)
     return "\n\n".join(text_parts)
+
+
+def _pdf_query(pdf_text: str) -> str:
+    low = pdf_text.lower()
+    i   = low.find("abstract")
+    if i != -1:
+        chunk = pdf_text[i + len("abstract"): i + len("abstract") + 1600]
+        j     = chunk.lower().find("introduction")
+        if j > 200:
+            chunk = chunk[:j]
+        cleaned = " ".join(chunk.split())
+        if len(cleaned) > 80:
+            return cleaned
+    return " ".join(pdf_text[:1600].split())
 
 
 def _search(query_text: str, k: int = 5):
@@ -75,6 +88,15 @@ def _search(query_text: str, k: int = 5):
         query=vector,
         limit=k,
     ).points
+
+
+def _rerank(query: str, candidates: list, top_n: int):
+    if not candidates:
+        return []
+    pairs  = [[query, (r.payload.get("title", "") + ". " + r.payload.get("summary", ""))[:1000]] for r in candidates]
+    scores = _cross_encoder.predict(pairs)
+    ranked = sorted(zip(candidates, scores), key=lambda cs: cs[1], reverse=True)
+    return [(c, float(s)) for c, s in ranked[:top_n]]
 
 
 def _get_memory(session_id: str) -> list:
@@ -168,37 +190,71 @@ def _hyde_query(question: str) -> str:
         return question
 
 
+_CONVERSATIONAL = {
+    "hi", "hii", "hiya", "heya", "hey", "hello", "hello there", "hi there",
+    "yo", "sup", "wassup", "whats up", "what's up", "good morning",
+    "good afternoon", "good evening", "good night", "how are you",
+    "how's it going", "hows it going", "thanks", "thank you", "thx", "ty",
+    "ok", "okay", "k", "cool", "nice", "great", "awesome", "got it",
+    "bye", "goodbye", "see ya", "who are you", "what can you do",
+    "what are you", "help",
+}
+
+
+def _is_conversational(question: str) -> str:
+    s = question.strip().lower().rstrip("?!. ")
+    return s in _CONVERSATIONAL
+
+
 def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, preloaded_history: list = None):
     if session_id not in _memories and preloaded_history:
         _memories[session_id] = preloaded_history
     history = _get_memory(session_id)
     sources = []
 
-    if True:
-        pdf_text    = _extract_pdf_text(pdf_bytes) if pdf_bytes else None
-        search_text = f"{question} {pdf_text[:1500]}" if pdf_text else question
+    pdf_text = _extract_pdf_text(pdf_bytes) if pdf_bytes else None
 
-        SCORE_THRESHOLD = 0.35
-        TARGET          = 2
+    if pdf_text or not _is_conversational(question):
+        CANDIDATES       = 25
+        TARGET           = 3
+        ABSTRACT_CHARS   = 900
+        RERANK_FLOOR     = float(os.getenv("RERANK_FLOOR", "-5.0"))
+        RERANK_FLOOR_PDF = float(os.getenv("RERANK_FLOOR_PDF", "-8.0"))
 
-        candidates   = _search(search_text, k=8)
-        filtered     = [r for r in candidates if r.score >= SCORE_THRESHOLD]
-        with_code    = [r for r in filtered if _github_links(r.payload)]
-        without_code = [r for r in filtered if not _github_links(r.payload)]
-
-        if with_code:
-            results = (with_code[:1] + without_code[:TARGET - 1])[:TARGET]
+        if pdf_text:
+            pdf_q        = _pdf_query(pdf_text)
+            search_text  = pdf_q[:1200]
+            rerank_query = pdf_q[:400]
         else:
-            results = without_code[:TARGET]
+            search_text  = _hyde_query(question)
+            rerank_query = question
+
+        candidates = _search(search_text, k=CANDIDATES)
+
+        seen_titles = set()
+        deduped     = []
+        for c in candidates:
+            key = c.payload.get("title", "").strip().lower()
+            if key and key in seen_titles:
+                continue
+            if key:
+                seen_titles.add(key)
+            deduped.append(c)
+        candidates = deduped
+
+        ranked = _rerank(rerank_query, candidates, top_n=TARGET)
+        print("[rerank]", [(round(s, 2), r.payload.get("title", "")[:55]) for r, s in ranked], flush=True)
+        floor      = RERANK_FLOOR_PDF if pdf_text else RERANK_FLOOR
+        results    = [r for r, s in ranked if s >= floor]
 
         context_parts = []
-        for r in results[:2]:
+        for r in results:
             p     = r.payload
             lines = [f"Title: {p.get('title', '')}"]
             year  = (p.get("published") or "")[:4]
             if year:
                 lines.append(f"Year: {year}")
-            lines.append(f"Abstract: {(p.get('summary', '')[:400])}")
+            lines.append(f"Abstract: {(p.get('summary', '')[:ABSTRACT_CHARS])}")
             github = _github_links(p)
             if github:
                 lines.append(f"Implementation (GitHub): {', '.join(github)}")
@@ -223,11 +279,13 @@ def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, prel
                 f"The user uploaded a PDF — answer relative to this document specifically:\n\n{pdf_text}\n\n"
                 f"---\nRelated papers for additional context (use only if relevant):\n{qdrant_context}"
             )
-        else:
+        elif results:
             user_msg = (
                 f"Question: {question}\n\n"
                 f"---\nRelated papers for reference (cite when useful, don't force-fit):\n{qdrant_context}"
             )
+        else:
+            user_msg = f"Question: {question}"
 
         for r in results:
             p = r.payload
@@ -247,6 +305,9 @@ def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, prel
                 "doi":             p.get("doi", ""),
                 "fields_of_study": p.get("fields_of_study", []),
             })
+    else:
+        user_msg = f"Question: {question}"
+
     api_messages = list(history)
     api_messages.append({"role": "user", "content": user_msg})
     return api_messages, sources, history

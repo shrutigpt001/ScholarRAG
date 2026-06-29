@@ -6,7 +6,7 @@ anthropic
 langchain-huggingface
 qdrant-client
 sentence-transformers
-pdfplumber
+pymupdf
 certifi
 requests
 python-jose
