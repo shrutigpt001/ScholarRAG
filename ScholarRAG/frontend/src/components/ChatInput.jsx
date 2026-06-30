@@ -6,23 +6,34 @@ export default function ChatInput({ onSend, busy = false, phase = "" }) {
   const [file, setFile]         = useState(null);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
+  const dragDepth    = useRef(0);
 
   const acceptFile = (f) => {
     if (f && f.type === "application/pdf") setFile(f);
   };
 
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+
   const handleDragOver = (e) => {
     e.preventDefault();
-    setDragging(true);
   };
 
   const handleDragLeave = (e) => {
     e.preventDefault();
-    setDragging(false);
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragging(false);
+    }
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
+    dragDepth.current = 0;
     setDragging(false);
     acceptFile(e.dataTransfer.files[0]);
   };
@@ -59,6 +70,7 @@ export default function ChatInput({ onSend, busy = false, phase = "" }) {
       )}
 
       <div
+        onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}

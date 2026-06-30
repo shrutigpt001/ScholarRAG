@@ -28,7 +28,7 @@ function MetaRow({ icon: Icon, label, children }) {
   );
 }
 
-export default function SourcesPanel({ sources = [], latestKeys = new Set() }) {
+export default function SourcesPanel({ sources = [], latestKeys = new Set(), width = 360 }) {
   const [query, setQuery] = useState("");
 
   const filtered = query.trim()
@@ -36,7 +36,7 @@ export default function SourcesPanel({ sources = [], latestKeys = new Set() }) {
     : sources;
 
   return (
-    <div className="w-[360px] h-full border-l border-slate-800 flex flex-col bg-slate-950">
+    <div style={{ width: `${width}px` }} className="h-full border-l border-slate-800 flex flex-col bg-slate-950 flex-shrink-0">
       <div className="px-5 py-4 border-b border-slate-800 space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-bold text-slate-400 tracking-widest uppercase">Sources</h2>

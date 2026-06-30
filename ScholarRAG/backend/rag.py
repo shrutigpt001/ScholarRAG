@@ -171,11 +171,18 @@ def _classify_query(question: str) -> str:
     return "research" if "research" in label else "conversational"
 
 
+_hyde_cache: dict = {}
+
+
 def _hyde_query(question: str) -> str:
+    key = question.strip().lower()
+    if key in _hyde_cache:
+        return _hyde_cache[key]
     try:
         resp = _client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=80,
+            temperature=0,
             messages=[{
                 "role": "user",
                 "content": (
@@ -185,7 +192,9 @@ def _hyde_query(question: str) -> str:
                 ),
             }],
         )
-        return resp.content[0].text.strip()
+        result = resp.content[0].text.strip()
+        _hyde_cache[key] = result
+        return result
     except Exception:
         return question
 
@@ -246,6 +255,8 @@ def _prepare_query(question: str, session_id: str, pdf_bytes: bytes = None, prel
         print("[rerank]", [(round(s, 2), r.payload.get("title", "")[:55]) for r, s in ranked], flush=True)
         floor      = RERANK_FLOOR_PDF if pdf_text else RERANK_FLOOR
         results    = [r for r, s in ranked if s >= floor]
+        if not results and ranked:
+            results = [ranked[0][0]]
 
         context_parts = []
         for r in results:
@@ -361,33 +372,43 @@ async def query_rag_stream(question: str, session_id: str, pdf_bytes: bytes = No
     max_tool_rounds = 3
     answer = ""
 
-    for _ in range(max_tool_rounds + 1):
-        async with _async_client.messages.stream(
-            model=model,
-            max_tokens=2048,
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            messages=api_messages,
-            tools=[FETCH_URL_TOOL],
-        ) as stream:
-            async for text in stream.text_stream:
-                answer += text
-                yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
-            final_msg = await stream.get_final_message()
+    try:
+        for _ in range(max_tool_rounds + 1):
+            async with _async_client.messages.stream(
+                model=model,
+                max_tokens=2048,
+                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                messages=api_messages,
+                tools=[FETCH_URL_TOOL],
+            ) as stream:
+                async for text in stream.text_stream:
+                    answer += text
+                    yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
+                final_msg = await stream.get_final_message()
 
-        if final_msg.stop_reason == "tool_use":
-            tool_results = []
-            for block in final_msg.content:
-                if block.type == "tool_use":
-                    content = await asyncio.to_thread(_execute_fetch, block.input.get("url", ""))
-                    tool_results.append({
-                        "type":        "tool_result",
-                        "tool_use_id": block.id,
-                        "content":     content,
-                    })
-            api_messages.append({"role": "assistant", "content": final_msg.content})
-            api_messages.append({"role": "user",      "content": tool_results})
-        else:
-            break
+            if final_msg.stop_reason == "tool_use":
+                tool_results = []
+                for block in final_msg.content:
+                    if block.type == "tool_use":
+                        content = await asyncio.to_thread(_execute_fetch, block.input.get("url", ""))
+                        tool_results.append({
+                            "type":        "tool_result",
+                            "tool_use_id": block.id,
+                            "content":     content,
+                        })
+                api_messages.append({"role": "assistant", "content": final_msg.content})
+                api_messages.append({"role": "user",      "content": tool_results})
+            else:
+                break
+    except anthropic.RateLimitError:
+        note = "\n\n⚠️ The model is busy right now (rate limit reached). Please wait a minute and try again."
+        answer += note
+        yield f"data: {json.dumps({'type': 'token', 'text': note})}\n\n"
+    except anthropic.APIError as e:
+        print(f"[anthropic error] {type(e).__name__}: {e}", flush=True)
+        note = "\n\n⚠️ Sorry — something went wrong generating the answer. Please try again."
+        answer += note
+        yield f"data: {json.dumps({'type': 'token', 'text': note})}\n\n"
 
     history.append({"role": "user",      "content": question})
     history.append({"role": "assistant", "content": answer})

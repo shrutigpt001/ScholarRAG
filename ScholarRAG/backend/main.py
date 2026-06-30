@@ -1,3 +1,4 @@
+import os
 import json as _json
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Form, File, UploadFile, Depends
@@ -32,7 +33,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://13.206.126.59:5173"],
+    allow_origins=["http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -313,4 +314,4 @@ def clear(req: ClearRequest, user: dict = Depends(get_current_user)):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}

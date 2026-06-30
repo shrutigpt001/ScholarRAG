@@ -3,11 +3,17 @@ apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
     extraMounts:
-      - hostPath: /home/ubuntu/qdrant_local/qdrant_local
-        containerPath: /mnt/qdrant_local
       - hostPath: /home/ubuntu
         containerPath: /mnt/host
     extraPortMappings:
       - containerPort: 80
         hostPort: 8080
         protocol: TCP
+  - role: worker
+    extraMounts:
+      - hostPath: /home/ubuntu
+        containerPath: /mnt/host
+  - role: worker
+    extraMounts:
+      - hostPath: /home/ubuntu
+        containerPath: /mnt/host

@@ -109,23 +109,25 @@ export default function Sidebar({
   return (
     <div className="flex h-full">
       <div
-        className={`h-full bg-slate-950 border-r border-slate-800 p-5 flex flex-col transition-all duration-300 ${
-          open ? "w-72" : "w-0 overflow-hidden p-0"
+        className={`h-full bg-slate-950 flex flex-col transition-all duration-300 overflow-hidden flex-shrink-0 ${
+          open ? "w-72 p-5 border-r border-slate-800" : "w-0 p-0"
         }`}
       >
         {/* HEADER */}
-        <div className="flex items-center justify-between mb-10">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg">
-              <FaBookOpen className="text-2xl text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-extrabold text-white">ScholarRAG</h1>
-              <p className="text-xs text-slate-400">Research Intelligence Platform</p>
-            </div>
+        <div className="flex items-center gap-3 mb-10 whitespace-nowrap">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg flex-shrink-0">
+            <FaBookOpen className="text-2xl text-white" />
           </div>
-          <button onClick={() => setOpen(!open)} className="text-white text-xl">
-            <Menu />
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl font-extrabold text-white">ScholarRAG</h1>
+            <p className="text-xs text-slate-400">Research Intelligence Platform</p>
+          </div>
+          <button
+            onClick={() => setOpen(false)}
+            className="text-slate-400 hover:text-white transition-colors flex-shrink-0"
+            title="Close sidebar"
+          >
+            <Menu size={18} />
           </button>
         </div>
 
@@ -252,16 +254,16 @@ export default function Sidebar({
         </div>
 
         {/* PROFILE */}
-        <div className="mt-auto pt-4">
+        <div className="mt-auto pt-4 relative">
           {showProfile && (
-            <div className="mb-3 bg-slate-900 rounded-xl p-3 space-y-1 border border-slate-800">
+            <div className="absolute bottom-full mb-2 left-0 right-0 bg-slate-900 rounded-xl p-3 space-y-1 border border-slate-800 shadow-xl z-10">
               <p className="text-xs text-slate-500 uppercase tracking-wider mb-2 px-1">AI Model</p>
               {MODELS.map(m => {
                 const Icon = m.Icon;
                 return (
                   <button
                     key={m.id}
-                    onClick={() => onModelChange(m.id)}
+                    onClick={() => { onModelChange(m.id); setShowProfile(false); }}
                     className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${
                       model === m.id
                         ? "bg-slate-800 border border-slate-700"
@@ -310,7 +312,8 @@ export default function Sidebar({
       {!open && (
         <button
           onClick={() => setOpen(true)}
-          className="h-full px-2 text-slate-400 hover:text-white border-r border-slate-800"
+          className="px-2 pt-4 text-slate-400 hover:text-white transition-colors flex-shrink-0"
+          title="Open sidebar"
         >
           <Menu size={18} />
         </button>
