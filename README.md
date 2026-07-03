@@ -97,6 +97,10 @@ ScholarRAG
 - Git
 - GitHub
 - Nginx
+- Ingress
+- Sqllite
+- Langchain
+- Hugging Face models
 
 ---
 
