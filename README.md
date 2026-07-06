@@ -108,6 +108,7 @@ ScholarRAG
 
 ```
 ![image alt](https://github.com/shrutigpt001/ScholarRAG/blob/5f20f207a7a16ba030662221ebbf3b10eeae0f8d/ScholarRAG/ScholarRAG_Certificates.pdf.jpeg)
+
 ```
 
 # Acknowledgement
