@@ -107,7 +107,7 @@ ScholarRAG
 > Attach your internship completion certificate here.
 
 ```
-<img width="2000" height="1414" alt="Image" src="https://github.com/user-attachments/assets/9200b948-a4ac-44c2-8033-ddeb120eefac" />
+![image alt](https://github.com/shrutigpt001/ScholarRAG/blob/5f20f207a7a16ba030662221ebbf3b10eeae0f8d/ScholarRAG/ScholarRAG_Certificates.pdf.jpeg)
 ```
 
 # Acknowledgement
