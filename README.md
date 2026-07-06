@@ -107,8 +107,7 @@ ScholarRAG
 > Attach your internship completion certificate here.
 
 ```
-![ScholarRAG Certificate](ScholarRAG_Certificate.jpeg)
-
+![ScholarRAG Certificate](https://raw.githubusercontent.com/shrutigpt001/ScholarRAG/main/ScholarRAG_Certificate.jpeg)
 ```
 
 # Acknowledgement
