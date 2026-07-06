@@ -107,9 +107,9 @@ ScholarRAG
 > Attach your internship completion certificate here.
 
 ```
-certificates/
-└── ScholarRAG_Certificate.pdf
+<img width="2000" height="1414" alt="Image" src="https://github.com/user-attachments/assets/9200b948-a4ac-44c2-8033-ddeb120eefac" />
 ```
+
 # Acknowledgement
 
 I sincerely thank my mentors **[Ujjwal Pratap Singh](https://www.linkedin.com/in/ujjwal-pratap-singh/?skipRedirect=true)** and **[Skill Nebula Private Limited](https://www.linkedin.com/company/skillnebula/posts/?feedView=all)** for their continuous guidance and support throughout this internship. This opportunity significantly enhanced my technical and professional skills.
