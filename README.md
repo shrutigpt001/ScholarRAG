@@ -103,12 +103,9 @@ ScholarRAG
 ---
 
 # Certificate
+<img width="2000" height="1414" alt="ScholarRAG_Certificate" src="https://github.com/user-attachments/assets/69a06e2f-33b2-44a8-a58b-998e1903c012" />
 
-> Attach your internship completion certificate here.
-
-```
-![ScholarRAG Certificate](https://raw.githubusercontent.com/shrutigpt001/ScholarRAG/main/ScholarRAG_Certificate.jpeg)
-```
+---
 
 # Acknowledgement
 
