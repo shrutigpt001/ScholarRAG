@@ -10,15 +10,14 @@
 
 # Student Details
 
-**Name:** Akriti Yadav
+**Name:** Shruti Gupta
 
-**Email ID:** yourmail@example.com
+**Email ID:** shrutigpt001@gmail.com
+**College Name:** Khwaja Moinuddin Chishti Language University
 
-**College Name:** Your College Name
+**Branch/Specialization:** B.Tech CSE (AI ML)
 
-**Branch/Specialization:** B.Tech CSE
-
-**College ID:** XXXXXXXX
+**College ID:** B-0843
 
 ---
 
@@ -44,7 +43,7 @@
 
 # Overall Learning
 
-During this internship, I gained hands-on experience in building and deploying an end-to-end Retrieval-Augmented Generation (RAG) system. The project provided practical exposure to Docker, Kubernetes, AWS EC2, vector databases, GitHub collaboration, and cloud deployment. Working as the team leader also strengthened my communication, leadership, and project management skills.
+Working on this project gave me hands-on experience in developing and contributing to a real-world application. I strengthened my understanding of collaborative software development, version control with Git and GitHub, API integration, debugging, and writing clean, maintainable code. The project also improved my problem-solving, teamwork, and communication skills while providing a better understanding of the end-to-end software development lifecycle.
 
 ---
 
@@ -58,15 +57,13 @@ ScholarRAG is an AI-powered research assistant that retrieves information from r
 
 ### My Contributions
 
-- Team Leader
-- Dataset preparation for RAG pipeline
-- Research paper collection
-- Docker image creation
-- Containerization
-- Kubernetes Deployment
-- YAML configuration
-- GitHub Collaboration
-
+- Developed responsive and intuitive user interfaces with a focus on usability and accessibility.
+- Built reusable frontend components to improve code maintainability.
+- Integrated frontend features with backend APIs for efficient data exchange.
+- Implemented authentication-related UI and handled API responses.
+- Enhanced the chat interface by improving message rendering and user interaction.
+- Fixed UI bugs and optimized application performance.
+- Collaborated with the team using Git and GitHub throughout the development process.
 ---
 
 # Repository Structure
