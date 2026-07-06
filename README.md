@@ -13,6 +13,7 @@
 **Name:** Shruti Gupta
 
 **Email ID:** shrutigpt001@gmail.com
+
 **College Name:** Khwaja Moinuddin Chishti Language University
 
 **Branch/Specialization:** B.Tech CSE (AI ML)
